@@ -1,6 +1,6 @@
 ---
 name: hermes-arxiv-agent-update-cron
-description: Use this skill inside a Hermes conversation when a user already has a working local checkout of genggng/hermes-arxiv-agent and only wants to refresh the cron prompt and update or recreate the existing daily cron job without recloning the repo or reinstalling dependencies.
+description: Use this skill inside a Hermes conversation when a user already has a working local checkout of hermes-arxiv-agent and only wants to refresh the cron prompt and update or recreate the existing daily cron job without recloning the repo or reinstalling dependencies, while preserving either local mode or GitHub Pages mode.
 ---
 
 # Hermes Arxiv Agent Update Cron
@@ -15,6 +15,7 @@ Use it when the user wants any of the following:
 - update the current daily arXiv cron job to match the latest repository logic
 - recreate the cron job from the current local repository without reinstalling anything
 - ensure the cron prompt includes the latest GitHub Pages publishing step
+- switch or preserve the deployment mode of the existing cron job
 
 ## Goal
 
@@ -24,7 +25,11 @@ Leave the user with:
 2. a freshly generated `cronjob_prompt.generated.txt` pointing to the real local path
 3. a Hermes cron job whose prompt matches that generated file
 4. delivery set to `feishu` rather than `local`
-5. the repository `origin` remote using SSH so future publish steps can push non-interactively
+
+If the repository is in GitHub Pages mode, also leave the user with:
+
+5. the repository `origin` or chosen publish remote pointing to the user's own writable fork
+6. a remote configuration suitable for non-interactive Git pushes, preferably SSH
 
 ## Required Workflow
 
@@ -41,6 +46,13 @@ If the user already provided the path, use that exact path.
 
 ### 2. Regenerate the cron prompt
 
+Determine the intended deployment mode before regenerating:
+
+- if `.deploy_mode` exists, use that mode unless the user explicitly wants to change it
+- otherwise default to `local`
+
+Do not ask the user to choose freely if the existing repository already has a clear mode recorded in `.deploy_mode`.
+
 Run inside `PROJECT_DIR`:
 
 ```bash
@@ -51,11 +63,13 @@ This must regenerate `cronjob_prompt.generated.txt` from the tracked `cronjob_pr
 
 Do not hand-edit the generated prompt.
 
-If the repository `origin` still points to the canonical HTTPS URL, switch it to:
+If the intended mode is GitHub Pages, run:
 
 ```bash
-git remote set-url origin git@github.com:genggng/hermes-arxiv-agent.git
+DEPLOY_MODE=pages bash prepare_deploy.sh
 ```
+
+If the intended mode is GitHub Pages, ensure the publish remote points to the user's own writable fork, not the upstream repository.
 
 ### 3. Validate the generated prompt
 
@@ -63,7 +77,8 @@ Confirm that `cronjob_prompt.generated.txt`:
 
 - contains the real absolute `PROJECT_DIR`
 - does not contain placeholder paths such as `/path/to/hermes-arxiv-agent`
-- includes the static-site publishing step:
+- in local mode, does not include the static-site publishing step
+- in GitHub Pages mode, includes the static-site publishing step:
 
 ```bash
 bash scripts/publish_viewer.sh
@@ -91,8 +106,8 @@ Confirm all of the following:
 - there is exactly one active daily cron job for this repository workflow
 - the active job uses the latest generated prompt
 - delivery is set to `feishu`
-- the prompt now contains the GitHub Pages publish step
-- the repository `origin` uses `git@github.com:genggng/hermes-arxiv-agent.git`
+- local mode stays local-only
+- GitHub Pages mode contains the publish step and points to the user's own writable fork
 
 ## Behavior Rules
 
@@ -103,7 +118,8 @@ Confirm all of the following:
 - Keep the local checkout path exactly as found.
 - If the cron system cannot edit jobs in place, replace the old one cleanly rather than leaving duplicates.
 - Treat `cronjob_prompt.txt` as the template source of truth and `cronjob_prompt.generated.txt` as the deployable cron payload.
-- Prefer an SSH Git remote for this repository so scheduled publishing does not depend on HTTPS credentials.
+- Respect the current deployment mode unless the user explicitly asks to switch modes.
+- In GitHub Pages mode, prefer a fork remote that the user owns; do not direct scheduled publishing to the upstream public repository by default.
 
 ## Suggested User-Facing Outcome
 

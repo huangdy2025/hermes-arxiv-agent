@@ -10,6 +10,7 @@ viewer/favorites.json
 new_papers.json
 pending_llm_ids.txt
 cronjob_prompt.generated.txt
+.deploy_mode
 
 crawled_ids.txt
 
