@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Multi-Source Paper Monitor (arXiv + Semantic Scholar + Web of Science)
+Multi-Source Paper Monitor (arXiv + Semantic Scholar + Scopus)
 三源合一文献监控 - GitHub Actions 版本
 支持：
   - arXiv: 预印本（免费，无需 API key）
   - Semantic Scholar: 全学科期刊（免费，可选 API key）
-  - Web of Science: 核心期刊（需机构 API key）
+  - Scopus: 核心期刊（免费，需注册 API key）
 """
 
 import os
@@ -27,9 +27,9 @@ ARXIV_REQUEST_INTERVAL = 6  # 秒
 SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")  # 可选
 
-# Web of Science 配置
-WEB_OF_SCIENCE_URL = "https://api.clarivate.com/apis/wos-starter/v1/documents"
-WEB_OF_SCIENCE_API_KEY = os.environ.get("WEB_OF_SCIENCE_API_KEY", "")  # 必需
+# Scopus 配置
+SCOPUS_API_URL = "https://api.elsevier.com/content/search/scopus"
+SCOPUS_API_KEY = os.environ.get("SCOPUS_API_KEY", "")  # 必需
 
 # 通用配置
 REQUEST_INTERVAL = 3  # 不同平台间请求间隔
@@ -49,7 +49,7 @@ def load_search_keywords():
     """读取搜索关键词"""
     keywords_file = Path("search_keywords.txt")
     if not keywords_file.exists():
-        return "(all:oceanography)+AND+(all:deep+OR+all:neural+OR+all:transformer+OR+all:learning)"
+        return "oceanography AND (deep learning OR neural network OR transformer OR AI OR machine learning)"
     return keywords_file.read_text().strip()
 
 
@@ -124,7 +124,7 @@ def search_arxiv_papers(keywords: str, max_results: int = 20):
                     "title": title,
                     "abstract": abstract,
                     "published": published,
-                    "authors": authors[:5],  # 最多 5 个作者
+                    "authors": authors[:5],
                     "url": f"https://arxiv.org/abs/{arxiv_id}",
                 })
             
@@ -147,15 +147,16 @@ def search_semantic_scholar(keywords: str, max_results: int = 20):
     if SEMANTIC_SCHOLAR_API_KEY:
         headers["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
     
-    # 转换关键词格式
-    # 将 arXiv 格式转为自然语言关键词
-    query_text = keywords.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
+    # 转换关键词格式为自然语言
+    query_text = keywords
+    # 简化 arXiv 语法
+    query_text = query_text.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
     query_text = query_text.replace("all:", "").strip()
     
     params = {
         "query": query_text,
         "fields": "title,abstract,publicationDate,authors,url,publicationTypes,journal,venue,year,openAccessPdf",
-        "year": f"{(datetime.now().year - 1)}-",  # 最近 1-2 年
+        "year": f"{(datetime.now().year - 2)}-",  # 最近 2-3 年
     }
     
     for attempt in range(MAX_RETRIES + 1):
@@ -192,10 +193,7 @@ def search_semantic_scholar(keywords: str, max_results: int = 20):
                     if author.get("name"):
                         authors.append(author["name"])
                 
-                # 获取 PDF 链接或详情页链接
-                pdf_url = None
-                if paper.get("openAccessPdf"):
-                    pdf_url = paper["openAccessPdf"].get("url")
+                pdf_url = paper.get("openAccessPdf", {}).get("url") if paper.get("openAccessPdf") else None
                 url = pdf_url if pdf_url else paper.get("url", f"https://www.semanticscholar.org/paper/{paper_id}")
                 
                 papers.append({
@@ -224,30 +222,35 @@ def search_semantic_scholar(keywords: str, max_results: int = 20):
     return []
 
 
-def search_web_of_science(keywords: str, max_results: int = 20):
-    """搜索 Web of Science 论文"""
-    print(f"\n[Web of Science] Searching: {keywords}")
+def search_scopus(keywords: str, max_results: int = 20):
+    """搜索 Scopus 论文"""
+    print(f"\n[Scopus] Searching: {keywords}")
     
-    if not WEB_OF_SCIENCE_API_KEY:
-        print("[Web of Science] API key not configured, skipping")
+    if not SCOPUS_API_KEY:
+        print("[Scopus] API key not configured, skipping")
         return []
     
     headers = {
-        "Content-Type": "application/json",
-        "X-API-Key": WEB_OF_SCIENCE_API_KEY
+        "X-ELS-APIKey": SCOPUS_API_KEY,
+        "Accept": "application/json"
     }
     
-    # 转换关键词格式为 WoS 查询语法
-    query_text = keywords.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
+    # 转换关键词为 Scopus 查询语法
+    # Scopus 使用 TITLE-ABS-KEY 进行标题/摘要/关键词搜索
+    query_text = keywords
+    query_text = query_text.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
     query_text = query_text.replace("all:", "").strip()
     
+    # 构建 Scopus 查询
+    scopus_query = f'TITLE-ABS-KEY({query_text}) AND PUBYEAR > {datetime.now().year - 3}'
+    
     params = {
-        "q": f'TS=("{query_text}") AND PY=2024-2026',  # 主题搜索，最近 2-3 年
-        "databaseId": "WOS",
-        "lang": "en",
-        "firstRecord": 1,
+        "query": scopus_query,
         "count": max_results,
-        "orderBy": "PY.D",  # 按出版年份倒序
+        "start": 0,
+        "sortBy": "prism_coverdate",
+        "sortDirection": "desc",
+        "view": "COMPLETE",  # 获取完整信息
     }
     
     for attempt in range(MAX_RETRIES + 1):
@@ -258,18 +261,19 @@ def search_web_of_science(keywords: str, max_results: int = 20):
                 time.sleep(REQUEST_INTERVAL)
             
             response = requests.get(
-                WEB_OF_SCIENCE_URL,
+                SCOPUS_API_URL,
                 params=params,
                 headers=headers,
                 timeout=60
             )
             
             if response.status_code == 401 or response.status_code == 403:
-                print(f"[Web of Science] Authentication failed: {response.status_code}")
+                print(f"[Scopus] Authentication failed: {response.status_code}")
+                print(f"[Scopus] Please check your API key at https://dev.elsevier.com")
                 return []
             
             if response.status_code == 429:
-                print(f"[Web of Science] Rate limited (429), attempt {attempt + 1}/{MAX_RETRIES}")
+                print(f"[Scopus] Rate limited (429), attempt {attempt + 1}/{MAX_RETRIES}")
                 if attempt < MAX_RETRIES:
                     continue
             
@@ -277,55 +281,81 @@ def search_web_of_science(keywords: str, max_results: int = 20):
             data = response.json()
             
             papers = []
-            documents = data.get("Data", [])
             
-            for doc in documents:
-                doi = doc.get("DOI", "")
-                title = doc.get("title", "No title")
+            # Scopus API 返回结构：search-results -> entry
+            entries = data.get("search-results", {}).get("entry", [])
+            
+            for entry in entries:
+                # 获取 DOI 或 Scopus ID
+                doi = entry.get("prism_doi", "")
+                scopus_id = entry.get("dc:identifier", "").replace("SCOPUS_ID:", "")
+                paper_id = doi or scopus_id
+                
+                if not paper_id:
+                    continue
+                
+                title = entry.get("dc:title", "No title")
                 
                 # 获取摘要
-                abstract = ""
-                if "abstracts" in doc and doc["abstracts"]:
-                    abstract = doc["abstracts"][0].get("value", "No abstract")[:500]
+                abstract = entry.get("dc:description", "No abstract")
+                if not abstract or abstract == "No abstract":
+                    abstract = "No abstract available"
+                abstract = abstract[:500]
                 
                 # 获取作者
                 authors = []
-                if "authors" in doc:
-                    for author in doc["authors"][:5]:
-                        if author.get("name"):
-                            authors.append(author["name"])
+                if "authkeywords" in entry:
+                    # authkeywords 可能是一个列表或字典
+                    auth_list = entry["authkeywords"]
+                    if isinstance(auth_list, dict):
+                        auth_list = auth_list.get("$text", "").split("|")
+                    elif isinstance(auth_list, list):
+                        auth_list = [item.get("$text", "") if isinstance(item, dict) else str(item) for item in auth_list]
+                    else:
+                        auth_list = str(auth_list).split("|")
+                    
+                    for i, kw in enumerate(auth_list[:5]):
+                        authors.append(kw.strip())
                 
                 # 出版日期
-                pub_date = ""
-                if "publishedDate" in doc:
-                    pub_date = doc["publishedDate"][:10]
-                elif "source" in doc:
-                    pub_date = doc["source"].get("publishedDate", "")[:10]
+                pub_date = entry.get("prism_coverdate", "")[:10] if entry.get("prism_coverdate") else ""
                 
                 # 链接
-                url = f"https://www.webofscience.com/wos/woscc/full-record/{doc.get('ut', '')}" if doc.get('ut') else ""
+                url = entry.get("link", [{}])[0].get("@href", "") if entry.get("link") else ""
+                if not url and doi:
+                    url = f"https://doi.org/{doi}"
+                elif not url and scopus_id:
+                    url = f"https://www.scopus.com/record/display.uri?eid={scopus_id}"
+                
+                # 期刊信息
+                journal = entry.get("prism_publicationName", "")
                 
                 papers.append({
-                    "id": generate_paper_id("wos", doi or doc.get("ut", "")),
-                    "source": "Web of Science",
+                    "id": generate_paper_id("scopus", paper_id),
+                    "source": "Scopus",
                     "doi": doi,
-                    "ut": doc.get("ut", ""),
+                    "scopus_id": scopus_id,
                     "title": title,
                     "abstract": abstract,
                     "published": pub_date,
                     "authors": authors,
                     "url": url,
-                    "journal": doc.get("source", {}).get("title", ""),
+                    "journal": journal,
                 })
                 
                 if len(papers) >= max_results:
                     break
             
-            print(f"[Web of Science] Found {len(papers)} papers")
+            print(f"[Scopus] Found {len(papers)} papers")
             return papers
             
+        except json.JSONDecodeError as e:
+            print(f"[Scopus] JSON parse error: {e}")
+            print(f"[Scopus] Response: {response.text[:500]}")
+            if attempt >= MAX_RETRIES:
+                return []
         except Exception as e:
-            print(f"[Web of Science] Error: {e}")
+            print(f"[Scopus] Error: {e}")
             if attempt >= MAX_RETRIES:
                 return []
     
@@ -343,7 +373,7 @@ def merge_and_deduplicate(all_papers_list: list) -> list:
                 seen_ids.add(paper["id"])
                 merged.append(paper)
     
-    # 按出版日期排序（最新的在前）
+    # 按出版日期排序
     merged.sort(key=lambda x: x.get("published", ""), reverse=True)
     
     return merged
@@ -413,17 +443,17 @@ def build_message(new_papers: list, source_counts: dict) -> str:
     message += f"📊 发现 {len(new_papers)} 篇新论文\n"
     message += f"   • arXiv: {source_counts.get('arXiv', 0)} 篇\n"
     message += f"   • Semantic Scholar: {source_counts.get('Semantic Scholar', 0)} 篇\n"
-    message += f"   • Web of Science: {source_counts.get('Web of Science', 0)} 篇\n\n"
+    message += f"   • Scopus: {source_counts.get('Scopus', 0)} 篇\n\n"
     
     message += "**最新论文列表：**\n\n"
     
     for i, paper in enumerate(new_papers[:10], 1):
         title = paper["title"][:60] + "..." if len(paper["title"]) > 60 else paper["title"]
-        authors = ", ".join(paper.get("authors", [])[:3])
+        authors = ", ".join(paper.get("authors", [])[:3]) if paper.get("authors") else "Unknown"
         if len(paper.get("authors", [])) > 3:
             authors += " et al."
         
-        source_emoji = {"arXiv": "📄", "Semantic Scholar": "🎓", "Web of Science": "📚"}.get(paper["source"], "📝")
+        source_emoji = {"arXiv": "📄", "Semantic Scholar": "🎓", "Scopus": "📚"}.get(paper["source"], "📝")
         
         message += f"{i}. {source_emoji} [{title}]({paper['url']})\n"
         message += f"   作者：{authors} | {paper.get('published', 'N/A')} | {paper['source']}\n\n"
@@ -438,7 +468,7 @@ def build_message(new_papers: list, source_counts: dict) -> str:
 
 def main():
     print("=" * 70)
-    print(f"[START] Multi-Source Paper Monitor (arXiv + Semantic Scholar + WoS)")
+    print(f"[START] Multi-Source Paper Monitor (arXiv + Semantic Scholar + Scopus)")
     print(f"[INFO] Date: {date.today().isoformat()}")
     print("=" * 70)
     
@@ -466,10 +496,10 @@ def main():
     all_papers.append(ss_papers)
     source_counts["Semantic Scholar"] = len(ss_papers)
     
-    # 3. Web of Science
-    wos_papers = search_web_of_science(keywords, max_results=20)
-    all_papers.append(wos_papers)
-    source_counts["Web of Science"] = len(wos_papers)
+    # 3. Scopus
+    scopus_papers = search_scopus(keywords, max_results=20)
+    all_papers.append(scopus_papers)
+    source_counts["Scopus"] = len(scopus_papers)
     
     # 合并去重
     all_unique_papers = merge_and_deduplicate(all_papers)
@@ -481,7 +511,7 @@ def main():
     
     if not new_papers:
         message = f"✅ 今日（{date.today().isoformat()}）未发现新的物理海洋学+AI 相关论文。\n\n"
-        message += f"搜索来源：arXiv, Semantic Scholar, Web of Science\n"
+        message += f"搜索来源：arXiv, Semantic Scholar, Scopus\n"
         message += f"关键词：oceanography + AI/ML/数据同化"
         send_feishu_message(message)
         print("[INFO] No new papers. Notification sent.")

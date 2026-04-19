@@ -33,10 +33,12 @@ jobs:
         FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
         SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
-        WEB_OF_SCIENCE_API_KEY: ${{ secrets.WEB_OF_SCIENCE_API_KEY }}
+        SCOPUS_API_KEY: ${{ secrets.SCOPUS_API_KEY }}
       run: |
         echo "🚀 Starting Multi-Source Paper Monitor..."
         echo "📅 Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        echo ""
+        echo "📊 Sources: arXiv + Semantic Scholar + Scopus"
         echo ""
         
         # 运行监控脚本
