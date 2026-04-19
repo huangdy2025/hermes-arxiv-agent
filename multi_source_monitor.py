@@ -441,6 +441,22 @@ def load_or_create_excel():
         ws.column_dimensions[get_column_letter(col)].width = width
     
     return wb
+    
+    # 设置表头样式
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    for col, _ in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    # 设置列宽
+    col_widths = [15, 45, 28, 35, 12, 18, 70, 60, 20, 12, 25, 10, 50]
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    
+    return wb
 
 
 def append_to_excel(wb, paper: dict):
@@ -702,18 +718,56 @@ def main():
     print(f"[INFO] Updated crawled_ids.txt with {len(new_ids)} new IDs")
     
     # 更新 Excel 记录
-    print("\\n[INFO] Updating Excel record...")
+    print("\n[INFO] Updating Excel record...")
     wb = load_or_create_excel()
     for paper in new_papers:
         append_to_excel(wb, paper)
     save_excel(wb)
     
-    # 导出 Viewer JSON
-    print("\\n[INFO] Exporting Viewer JSON...")
-    export_viewer_json_from_excel()
+    # === 关键修复：模仿 monitor.py 的流程 ===
+    # 1. 不直接导出 papers_data.json（此时 affiliations 和 summary_cn 为空）
+    # 2. 输出待处理论文列表，供 LLM 后续处理
+    # 3. LLM 读取 PDF 提取单位、生成中文总结后，才更新 papers_data.json
     
-    print("\\n" + "=" * 70)
-    print("[DONE] Multi-source monitor completed successfully")
+    # 构建待处理论文列表（Excel 中缺少 affiliations 和 summary_cn 的记录）
+    papers_to_process = []
+    for paper in new_papers:
+        papers_to_process.append({
+            "arxiv_id": paper.get("arxiv_id", ""),
+            "title": paper.get("title", ""),
+            "authors": paper.get("authors", []),
+            "abstract": paper.get("abstract", ""),
+            "summary_cn": "",  # 待 LLM 生成
+            "affiliations": "",  # 待 LLM 从 PDF 提取
+            "pdf_local_path": str(PAPERS_DIR / f"{paper.get('arxiv_id', '')}.pdf") if paper.get("arxiv_id") else "",
+            "source": paper.get("source", ""),
+        })
+    
+    # 输出 new_papers.json 供 LLM 读取
+    output_json = Path("new_papers.json")
+    output_data = {
+        "date": date.today().isoformat(),
+        "new_count": len(new_papers),
+        "pending_count": len(papers_to_process),
+        "papers_to_process": papers_to_process,
+        "feishu_msg": message,
+    }
+    output_json.write_text(json.dumps(output_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[INFO] LLM output written to: {output_json}")
+    
+    # === 注意：不在这里调用 export_viewer_json_from_excel() ===
+    # 因为此时 Excel 中的 affiliations 和 summary_cn 都是空的
+    # 导出操作应该由 LLM 处理完成后执行
+    
+    print("\n" + "=" * 70)
+    print("[DONE] Multi-source monitor completed")
+    print("[WAITING] LLM processing required for affiliations and summary_cn")
+    print("=" * 70)
+    print("下一步：LLM 需要读取 new_papers.json，处理每篇论文：")
+    print("  1. 读取 PDF 前两页提取作者单位 (affiliations)")
+    print("  2. 基于 abstract 生成 150 字以内中文总结 (summary_cn)")
+    print("  3. 更新回 papers_record.xlsx")
+    print("  4. 调用 export_viewer_json_from_excel() 生成 papers_data.json")
     print("=" * 70)
 
 
