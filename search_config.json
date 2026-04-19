@@ -3,7 +3,5 @@
   
   "arxiv_ai": "deep learning OR neural network OR transformer OR LSTM OR CNN OR RNN OR \"machine learning\" OR AI OR \"artificial intelligence\" OR \"data assimilation\" OR prediction OR forecast OR \"physics-informed\" OR \"PINN\" OR \"neural operator\"",
   
-  "semantic_scholar": "physical oceanography OR ocean modeling OR ocean dynamics OR ocean circulation AND machine learning OR deep learning OR AI OR data assimilation OR prediction",
-  
-  "scopus": "TITLE-ABS-KEY (\"physical oceanography\" OR \"ocean modeling\" OR \"ocean dynamics\" OR \"ocean circulation\" OR \"sea surface temperature\" OR \"ocean current\" OR \"marine science\") AND TITLE-ABS-KEY (\"deep learning\" OR \"neural network\" OR \"machine learning\" OR \"artificial intelligence\" OR \"data assimilation\" OR \"prediction\" OR \"forecast\" OR \"physics-informed\")"
+  "scopus": "TITLE-ABS-KEY (\"physical oceanography\" OR \"ocean modeling\" OR \"ocean dynamics\" OR \"ocean circulation\" OR \"sea surface temperature\" OR \"ocean current\" OR \"marine science\") AND TITLE-ABS-KEY (\"deep learning\" OR \"neural network\" OR \"machine learning\" OR \"artificial intelligence\" OR \"data assimilation\" OR \"prediction\" OR \"forecast\" OR \"physics-informed\" OR \"PINN\" OR \"neural operator\")"
 }

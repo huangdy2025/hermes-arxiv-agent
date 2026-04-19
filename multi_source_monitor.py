@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Multi-Source Paper Monitor (arXiv + Semantic Scholar + Scopus)
-三源合一文献监控 - GitHub Actions 版本
+Multi-Source Paper Monitor (arXiv + Scopus)
+双源文献监控 - GitHub Actions 版本
 支持：
   - arXiv: 预印本（免费，无需 API key）
-  - Semantic Scholar: 全学科期刊（免费，可选 API key）
-  - Scopus: 核心期刊（免费，需注册 API key）
+  - Scopus: 核心期刊（需注册 API key）
 """
 
 import os
@@ -22,10 +21,6 @@ from pathlib import Path
 # arXiv 配置
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ARXIV_REQUEST_INTERVAL = 6  # 秒
-
-# Semantic Scholar 配置
-SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
-SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")  # 可选
 
 # Scopus 配置
 SCOPUS_API_URL = "https://api.elsevier.com/content/search/scopus"
@@ -154,7 +149,10 @@ def search_arxiv_papers(ocean_keywords: str, ai_keywords: str, max_results: int 
 def search_semantic_scholar(keywords: str, max_results: int = 20):
     """搜索 Semantic Scholar 论文
     
-    Semantic Scholar 使用自然语言查询，支持 OR/AND 逻辑
+    Semantic Scholar 使用自然语言查询：
+    - 使用引号包裹短语，如 "physical oceanography"
+    - 多个词用 OR 连接
+    - 不支持复杂的布尔逻辑嵌套
     """
     print(f"\n[Semantic Scholar] Searching: {keywords}")
     
@@ -163,6 +161,7 @@ def search_semantic_scholar(keywords: str, max_results: int = 20):
         headers["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
     
     # Semantic Scholar 直接使用自然语言查询
+    # 支持 OR 连接多个关键词/短语
     query_text = keywords
     
     params = {
@@ -456,10 +455,9 @@ def build_message(new_papers: list, source_counts: dict) -> str:
     message += f"📅 日期：{today}\n"
     message += f"📊 发现 {len(new_papers)} 篇新论文\n"
     message += f"   • arXiv: {source_counts.get('arXiv', 0)} 篇\n"
-    message += f"   • Semantic Scholar: {source_counts.get('Semantic Scholar', 0)} 篇\n"
     message += f"   • Scopus: {source_counts.get('Scopus', 0)} 篇\n\n"
     
-    message += "**最新论文列表：**\n\n"
+    message += "**最新论文列表**:\n\n"
     
     for i, paper in enumerate(new_papers[:10], 1):
         title = paper["title"][:60] + "..." if len(paper["title"]) > 60 else paper["title"]
@@ -467,7 +465,7 @@ def build_message(new_papers: list, source_counts: dict) -> str:
         if len(paper.get("authors", [])) > 3:
             authors += " et al."
         
-        source_emoji = {"arXiv": "📄", "Semantic Scholar": "🎓", "Scopus": "📚"}.get(paper["source"], "📝")
+        source_emoji = {"arXiv": "📄", "Scopus": "📚"}.get(paper["source"], "📝")
         
         message += f"{i}. {source_emoji} [{title}]({paper['url']})\n"
         message += f"   作者：{authors} | {paper.get('published', 'N/A')} | {paper['source']}\n\n"
@@ -475,7 +473,7 @@ def build_message(new_papers: list, source_counts: dict) -> str:
     if len(new_papers) > 10:
         message += f"\n... 还有 {len(new_papers) - 10} 篇论文，请查看 GitHub Pages 获取完整列表。\n"
     
-    message += f"\n📌 搜索策略：oceanography + AI/ML/数据同化"
+    message += f"\n📌 搜索策略：oceanography + AI/ML/数据同化/PINN"
     
     return message
 
@@ -492,19 +490,17 @@ def main():
     search_config = load_search_config()
     arxiv_ocean = search_config.get("arxiv", "")
     arxiv_ai = search_config.get("arxiv_ai", "")
-    semantic_scholar_query = search_config.get("semantic_scholar", "")
     scopus_query = search_config.get("scopus", "")
     
     print(f"[INFO] arXiv 海洋学关键词：{arxiv_ocean}")
     print(f"[INFO] arXiv AI 关键词：{arxiv_ai}")
-    print(f"[INFO] Semantic Scholar 查询：{semantic_scholar_query}")
     print(f"[INFO] Scopus 查询：{scopus_query}")
     
     # 加载已爬取 ID
     crawled_ids = load_crawled_ids()
     print(f"[INFO] Loaded {len(crawled_ids)} crawled IDs")
     
-    # 搜索三个来源
+    # 搜索两个来源：arXiv + Scopus
     all_papers = []
     source_counts = {}
     
@@ -513,12 +509,7 @@ def main():
     all_papers.append(arxiv_papers)
     source_counts["arXiv"] = len(arxiv_papers)
     
-    # 2. Semantic Scholar - 使用完整的自然语言查询
-    ss_papers = search_semantic_scholar(semantic_scholar_query, max_results=20)
-    all_papers.append(ss_papers)
-    source_counts["Semantic Scholar"] = len(ss_papers)
-    
-    # 3. Scopus - 使用 Scopus 专用语法
+    # 2. Scopus - 使用 Scopus 专用语法
     scopus_papers = search_scopus(scopus_query, max_results=20)
     all_papers.append(scopus_papers)
     source_counts["Scopus"] = len(scopus_papers)
@@ -533,8 +524,8 @@ def main():
     
     if not new_papers:
         message = f"✅ 今日（{date.today().isoformat()}）未发现新的物理海洋学+AI 相关论文。\n\n"
-        message += f"搜索来源：arXiv, Semantic Scholar, Scopus\n"
-        message += f"关键词：oceanography + AI/ML/数据同化"
+        message += f"搜索来源：arXiv, Scopus\n"
+        message += f"关键词：oceanography + AI/ML/数据同化/PINN"
         send_feishu_message(message)
         print("[INFO] No new papers. Notification sent.")
         return
