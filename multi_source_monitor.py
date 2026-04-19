@@ -16,6 +16,9 @@ import hashlib
 import requests
 from datetime import date, datetime, timedelta
 from pathlib import Path
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 
 # ==================== 配置 ====================
 # arXiv 配置
@@ -33,6 +36,7 @@ RETRY_DELAY = 10
 
 PAPERS_DIR = Path("papers")
 CRAWLED_IDS_FILE = Path("crawled_ids.txt")
+EXCEL_FILE = Path("papers_record.xlsx")
 
 # 飞书配置
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
@@ -404,6 +408,163 @@ def save_crawled_ids(crawled_ids: set):
     CRAWLED_IDS_FILE.write_text("\n".join(sorted(crawled_ids)))
 
 
+def load_or_create_excel():
+    """加载或创建 Excel 文件"""
+    if EXCEL_FILE.exists():
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        if "Papers" not in wb.sheetnames:
+            wb.create_sheet("Papers")
+        return wb
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Papers"
+    headers = [
+        "arxiv_id", "title", "authors", "affiliations",
+        "published_date", "categories", "abstract", "summary_cn",
+        "pdf_filename", "crawled_date", "notes", "source", "url"
+    ]
+    ws.append(headers)
+    
+    # 设置表头样式
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    for col, _ in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    # 设置列宽
+    col_widths = [15, 45, 28, 35, 12, 18, 70, 60, 20, 12, 25, 10, 50]
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    
+    return wb
+
+
+def append_to_excel(wb, paper: dict):
+    """添加论文到 Excel"""
+    ws = wb["Papers"]
+    today = date.today().isoformat()
+    
+    # 从论文 ID 中提取 arxiv_id (格式：arxiv:1234.56789)
+    arxiv_id = ""
+    if paper.get("arxiv_id"):
+        arxiv_id = paper["arxiv_id"]
+    elif paper.get("id", "").startswith("arxiv:"):
+        arxiv_id = paper["id"].split(":")[1]
+    
+    row = [
+        arxiv_id,
+        paper.get("title", ""),
+        ", ".join(paper.get("authors", [])) if isinstance(paper.get("authors"), list) else paper.get("authors", ""),
+        paper.get("affiliations", ""),
+        paper.get("published", "")[:10] if paper.get("published") else "",
+        paper.get("categories", ""),
+        paper.get("abstract", "")[:500] if paper.get("abstract") else "",
+        paper.get("summary_cn", ""),
+        f"{arxiv_id}.pdf" if arxiv_id else "",
+        today,
+        "",  # notes
+        paper.get("source", ""),
+        paper.get("url", ""),
+    ]
+    ws.append(row)
+    
+    # 设置单元格格式
+    last_row = ws.max_row
+    for col in range(1, len(row) + 1):
+        ws.cell(row=last_row, column=col).alignment = Alignment(wrap_text=True, vertical="top")
+    
+    print(f"[INFO] Appended to Excel: {arxiv_id} - {paper.get('title', '')[:40]}...")
+
+
+def save_excel(wb):
+    """保存 Excel 文件"""
+    EXCEL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(EXCEL_FILE)
+    print(f"[INFO] Excel saved: {EXCEL_FILE}")
+
+
+def export_viewer_json_from_excel():
+    """从 papers_record.xlsx 导出 viewer 使用的 papers_data.json"""
+    if not EXCEL_FILE.exists():
+        print(f"[WARN] Excel not found, skip viewer export: {EXCEL_FILE}")
+        return
+    
+    viewer_json = Path("viewer/papers_data.json")
+    viewer_json.parent.mkdir(parents=True, exist_ok=True)
+    
+    wb = openpyxl.load_workbook(EXCEL_FILE, read_only=True)
+    if "Papers" not in wb.sheetnames:
+        print("[WARN] Sheet 'Papers' not found, skip viewer export")
+        return
+    
+    ws = wb["Papers"]
+    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+    if not header_row:
+        print("[WARN] Excel header missing, skip viewer export")
+        return
+    
+    headers = [str(h) if h is not None else "" for h in header_row]
+    index = {name: i for i, name in enumerate(headers)}
+    
+    required = [
+        "arxiv_id", "title", "authors", "affiliations", "published_date",
+        "categories", "abstract", "summary_cn", "pdf_filename", "crawled_date", "notes"
+    ]
+    missing = [c for c in required if c not in index]
+    if missing:
+        print(f"[WARN] Missing columns in Excel, skip viewer export: {missing}")
+        return
+    
+    def norm(v):
+        if v is None:
+            return ""
+        return str(v).replace("\n", " ").strip()
+    
+    def quality_key(p):
+        return (
+            1 if p.get("summary_cn") else 0,
+            1 if p.get("affiliations") else 0,
+            len(p.get("summary_cn", "")),
+            len(p.get("affiliations", "")),
+            len(p.get("abstract", "")),
+            p.get("crawled_date", ""),
+            p.get("published_date", ""),
+        )
+    
+    papers_by_id = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        paper = {col: norm(row[index[col]]) for col in required}
+        if not paper["arxiv_id"]:
+            continue
+        paper["pdf_url"] = f"https://arxiv.org/pdf/{paper['arxiv_id']}"
+        arxiv_id = paper["arxiv_id"]
+        old = papers_by_id.get(arxiv_id)
+        if old is None or quality_key(paper) > quality_key(old):
+            papers_by_id[arxiv_id] = paper
+    
+    papers = list(papers_by_id.values())
+    papers.sort(key=lambda x: (x["crawled_date"], x["published_date"], x["arxiv_id"]), reverse=True)
+    
+    crawled_dates = sorted({p["crawled_date"] for p in papers if p["crawled_date"]})
+    published_dates = sorted({p["published_date"] for p in papers if p["published_date"]})
+    
+    payload = {
+        "count": len(papers),
+        "crawled_date_min": crawled_dates[0] if crawled_dates else "",
+        "crawled_date_max": crawled_dates[-1] if crawled_dates else "",
+        "published_date_min": published_dates[0] if published_dates else "",
+        "published_date_max": published_dates[-1] if published_dates else "",
+        "papers": papers,
+    }
+    
+    viewer_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[INFO] Viewer JSON updated: {viewer_json} (count={len(papers)})")
+
+
 def get_feishu_access_token() -> str:
     """获取飞书访问令牌"""
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
@@ -540,7 +701,18 @@ def main():
     save_crawled_ids(crawled_ids)
     print(f"[INFO] Updated crawled_ids.txt with {len(new_ids)} new IDs")
     
-    print("\n" + "=" * 70)
+    # 更新 Excel 记录
+    print("\\n[INFO] Updating Excel record...")
+    wb = load_or_create_excel()
+    for paper in new_papers:
+        append_to_excel(wb, paper)
+    save_excel(wb)
+    
+    # 导出 Viewer JSON
+    print("\\n[INFO] Exporting Viewer JSON...")
+    export_viewer_json_from_excel()
+    
+    print("\\n" + "=" * 70)
     print("[DONE] Multi-source monitor completed successfully")
     print("=" * 70)
 

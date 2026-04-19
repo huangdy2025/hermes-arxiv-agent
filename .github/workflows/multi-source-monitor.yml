@@ -7,7 +7,9 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 permissions:
-  contents: read
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
   monitor:
@@ -32,13 +34,12 @@ jobs:
         FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
         FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
-        SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
         SCOPUS_API_KEY: ${{ secrets.SCOPUS_API_KEY }}
       run: |
         echo "🚀 Starting Multi-Source Paper Monitor..."
         echo "📅 Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
         echo ""
-        echo "📊 Sources: arXiv + Semantic Scholar + Scopus"
+        echo "📊 Sources: arXiv + Scopus"
         echo ""
         
         # 运行监控脚本
@@ -47,12 +48,16 @@ jobs:
         echo ""
         echo "✅ Monitor completed"
     
-    - name: Upload paper records (if any)
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: paper-records-${{ github.run_id }}
-        path: |
-          papers/
-          crawled_ids.txt
-        retention-days: 30
+    - name: Commit and push if there are changes
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add -A
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "chore: update papers and viewer data $(date -u +%Y-%m-%d)"
+          git push
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
