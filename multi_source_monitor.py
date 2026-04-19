@@ -45,12 +45,19 @@ FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 FEISHU_CHAT_ID = os.environ.get("FEISHU_CHAT_ID", "")
 
 
-def load_search_keywords():
-    """读取搜索关键词"""
-    keywords_file = Path("search_keywords.txt")
-    if not keywords_file.exists():
-        return "oceanography AND (deep learning OR neural network OR transformer OR AI OR machine learning)"
-    return keywords_file.read_text().strip()
+def load_search_config():
+    """加载分数据源的搜索配置"""
+    config_file = Path("search_config.json")
+    if not config_file.exists():
+        # 默认配置
+        return {
+            "arxiv": "oceanography AND (deep learning OR neural network OR transformer OR AI OR machine learning)",
+            "semantic_scholar": "oceanography AND machine learning OR deep learning OR AI",
+            "scopus": "TITLE-ABS-KEY(oceanography AND (deep learning OR neural network OR AI OR machine learning))"
+        }
+    
+    config = json.loads(config_file.read_text())
+    return config
 
 
 def generate_paper_id(source: str, identifier: str) -> str:
@@ -58,9 +65,14 @@ def generate_paper_id(source: str, identifier: str) -> str:
     return f"{source}:{identifier}"
 
 
-def search_arxiv_papers(keywords: str, max_results: int = 20):
-    """搜索 arXiv 论文（带重试）"""
-    print(f"\n[arXiv] Searching: {keywords}")
+def search_arxiv_papers(ocean_keywords: str, ai_keywords: str, max_results: int = 20):
+    """搜索 arXiv 论文（带重试）
+    
+    arXiv 使用 AND 连接两个查询条件
+    """
+    # 构建 arXiv 查询：(海洋学关键词) AND (AI 关键词)
+    search_query = f"({ocean_keywords}) AND ({ai_keywords})"
+    print(f"\n[arXiv] Searching: {search_query}")
     
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -72,7 +84,7 @@ def search_arxiv_papers(keywords: str, max_results: int = 20):
                 time.sleep(REQUEST_INTERVAL)
             
             params = {
-                "search_query": keywords,
+                "search_query": search_query,
                 "max_results": max_results,
                 "sortBy": "submittedDate",
                 "sortOrder": "descending"
@@ -140,23 +152,24 @@ def search_arxiv_papers(keywords: str, max_results: int = 20):
 
 
 def search_semantic_scholar(keywords: str, max_results: int = 20):
-    """搜索 Semantic Scholar 论文"""
+    """搜索 Semantic Scholar 论文
+    
+    Semantic Scholar 使用自然语言查询，支持 OR/AND 逻辑
+    """
     print(f"\n[Semantic Scholar] Searching: {keywords}")
     
     headers = {"Content-Type": "application/json"}
     if SEMANTIC_SCHOLAR_API_KEY:
         headers["x-api-key"] = SEMANTIC_SCHOLAR_API_KEY
     
-    # 转换关键词格式为自然语言
+    # Semantic Scholar 直接使用自然语言查询
     query_text = keywords
-    # 简化 arXiv 语法
-    query_text = query_text.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
-    query_text = query_text.replace("all:", "").strip()
     
     params = {
         "query": query_text,
         "fields": "title,abstract,publicationDate,authors,url,publicationTypes,journal,venue,year,openAccessPdf",
         "year": f"{(datetime.now().year - 2)}-",  # 最近 2-3 年
+        "limit": max_results
     }
     
     for attempt in range(MAX_RETRIES + 1):
@@ -223,7 +236,13 @@ def search_semantic_scholar(keywords: str, max_results: int = 20):
 
 
 def search_scopus(keywords: str, max_results: int = 20):
-    """搜索 Scopus 论文"""
+    """搜索 Scopus 论文
+    
+    Scopus 使用专门的查询语法：
+    - TITLE-ABS-KEY(): 搜索标题、摘要、关键词
+    - AND/OR/NOT: 逻辑运算符
+    - PUBYEAR >: 出版年份过滤
+    """
     print(f"\n[Scopus] Searching: {keywords}")
     
     if not SCOPUS_API_KEY:
@@ -235,14 +254,9 @@ def search_scopus(keywords: str, max_results: int = 20):
         "Accept": "application/json"
     }
     
-    # 转换关键词为 Scopus 查询语法
-    # Scopus 使用 TITLE-ABS-KEY 进行标题/摘要/关键词搜索
-    query_text = keywords
-    query_text = query_text.replace("(all:", "").replace(")", "").replace("+OR+", " OR ").replace("+AND+", " AND ")
-    query_text = query_text.replace("all:", "").strip()
-    
-    # 构建 Scopus 查询
-    scopus_query = f'TITLE-ABS-KEY({query_text}) AND PUBYEAR > {datetime.now().year - 3}'
+    # Scopus 查询已经是指定的语法，直接使用
+    # 添加出版年份过滤（最近 3 年）
+    scopus_query = f"{keywords} AND PUBYEAR > {datetime.now().year - 3}"
     
     params = {
         "query": scopus_query,
@@ -474,9 +488,17 @@ def main():
     
     PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     
-    # 加载关键词
-    keywords = load_search_keywords()
-    print(f"[INFO] Search keywords: {keywords}")
+    # 加载分数据源的搜索配置
+    search_config = load_search_config()
+    arxiv_ocean = search_config.get("arxiv", "")
+    arxiv_ai = search_config.get("arxiv_ai", "")
+    semantic_scholar_query = search_config.get("semantic_scholar", "")
+    scopus_query = search_config.get("scopus", "")
+    
+    print(f"[INFO] arXiv 海洋学关键词：{arxiv_ocean}")
+    print(f"[INFO] arXiv AI 关键词：{arxiv_ai}")
+    print(f"[INFO] Semantic Scholar 查询：{semantic_scholar_query}")
+    print(f"[INFO] Scopus 查询：{scopus_query}")
     
     # 加载已爬取 ID
     crawled_ids = load_crawled_ids()
@@ -486,18 +508,18 @@ def main():
     all_papers = []
     source_counts = {}
     
-    # 1. arXiv
-    arxiv_papers = search_arxiv_papers(keywords, max_results=20)
+    # 1. arXiv - 使用分离的海洋学和 AI 关键词
+    arxiv_papers = search_arxiv_papers(arxiv_ocean, arxiv_ai, max_results=20)
     all_papers.append(arxiv_papers)
     source_counts["arXiv"] = len(arxiv_papers)
     
-    # 2. Semantic Scholar
-    ss_papers = search_semantic_scholar(keywords, max_results=20)
+    # 2. Semantic Scholar - 使用完整的自然语言查询
+    ss_papers = search_semantic_scholar(semantic_scholar_query, max_results=20)
     all_papers.append(ss_papers)
     source_counts["Semantic Scholar"] = len(ss_papers)
     
-    # 3. Scopus
-    scopus_papers = search_scopus(keywords, max_results=20)
+    # 3. Scopus - 使用 Scopus 专用语法
+    scopus_papers = search_scopus(scopus_query, max_results=20)
     all_papers.append(scopus_papers)
     source_counts["Scopus"] = len(scopus_papers)
     
