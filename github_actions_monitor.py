@@ -2,19 +2,23 @@
 """
 Daily ArXiv Paper Monitor - GitHub Actions Version
 直接推送飞书消息，不需要 Hermes agent
+带重试机制和限流处理
 """
 
 import os
 import sys
 import json
 import time
+import random
 import requests
 from datetime import date, datetime
 from pathlib import Path
 
 # ==================== 配置 ====================
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
-REQUEST_INTERVAL = 3  # arXiv API 请求间隔（秒）
+REQUEST_INTERVAL = 6  # arXiv API 请求间隔（秒）- 增加到 6 秒降低触发限流概率
+MAX_RETRIES = 3  # 最大重试次数
+RETRY_DELAY = 10  # 初始重试延迟（秒）
 
 PAPERS_DIR = Path("papers")
 EXCEL_FILE = Path("papers_record.xlsx")
@@ -35,68 +39,127 @@ def load_search_keywords():
     return keywords_file.read_text().strip()
 
 
-def search_arxiv_papers(keywords: str, max_results: int = 20):
-    """搜索 arXiv 论文"""
-    params = {
-        "search_query": keywords,
-        "max_results": max_results,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending"
-    }
+def search_arxiv_papers_with_retry(keywords: str, max_results: int = 20):
+    """搜索 arXiv 论文，带重试机制"""
     
-    print(f"[INFO] Searching arXiv: {keywords}")
-    response = requests.get(ARXIV_API_URL, params=params, timeout=60)
-    response.raise_for_status()
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            print(f"[INFO] Searching arXiv (attempt {attempt + 1}/{MAX_RETRIES + 1}): {keywords}")
+            
+            params = {
+                "search_query": keywords,
+                "max_results": max_results,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending"
+            }
+            
+            # 添加随机延迟避免多实例同时请求
+            if attempt > 0:
+                jitter = random.uniform(0.5, 2.0)
+                delay = RETRY_DELAY * (2 ** (attempt - 1)) + jitter
+                print(f"[INFO] Retrying in {delay:.1f} seconds...")
+                time.sleep(delay)
+            elif attempt == 0 and REQUEST_INTERVAL > 0:
+                time.sleep(REQUEST_INTERVAL)
+            
+            response = requests.get(
+                ARXIV_API_URL, 
+                params=params, 
+                timeout=60,
+                headers={"User-Agent": "Hermes-Arxiv-Monitor/1.0"}
+            )
+            
+            # 检查是否被限流
+            if response.status_code == 429:
+                print(f"[WARNING] arXiv API rate limited (429). Retry {attempt + 1}/{MAX_RETRIES}")
+                if attempt < MAX_RETRIES:
+                    continue  # 重试
+                else:
+                    raise Exception("arXiv API rate limit exceeded after all retries")
+            
+            # 其他 HTTP 错误
+            response.raise_for_status()
+            
+            # 解析 Atom XML 响应
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.content)
+            ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+            
+            papers = []
+            for entry in root.findall("atom:entry", ns):
+                title_elem = entry.find("atom:title", ns)
+                title = title_elem.text.strip().replace("\n", " ") if title_elem is not None else "No title"
+                
+                id_elem = entry.find("atom:id", ns)
+                arxiv_id = id_elem.text.split("/")[-1] if id_elem is not None else "unknown"
+                
+                summary_elem = entry.find("atom:summary", ns)
+                abstract = summary_elem.text.strip().replace("\n", " ") if summary_elem is not None else "No abstract"
+                
+                published_elem = entry.find("atom:published", ns)
+                published = published_elem.text if published_elem is not None else ""
+                
+                # 获取作者
+                authors = []
+                for author in entry.findall("atom:author", ns):
+                    name_elem = author.find("atom:name", ns)
+                    if name_elem is not None:
+                        authors.append(name_elem.text)
+                
+                papers.append({
+                    "arxiv_id": arxiv_id,
+                    "title": title,
+                    "abstract": abstract,
+                    "published": published,
+                    "authors": authors,
+                })
+            
+            print(f"[INFO] Successfully retrieved {len(papers)} papers")
+            return papers
+            
+        except requests.exceptions.Timeout:
+            print(f"[WARNING] Request timeout (attempt {attempt + 1}/{MAX_RETRIES + 1})")
+            if attempt >= MAX_RETRIES:
+                raise Exception("arXiv API timeout after all retries")
+        except requests.exceptions.RequestException as e:
+            print(f"[WARNING] Request failed: {e} (attempt {attempt + 1}/{MAX_RETRIES + 1})")
+            if attempt >= MAX_RETRIES:
+                raise
     
-    # 解析 Atom XML 响应
-    import xml.etree.ElementTree as ET
-    root = ET.fromstring(response.content)
-    ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
-    
-    papers = []
-    for entry in root.findall("atom:entry", ns):
-        title_elem = entry.find("atom:title", ns)
-        title = title_elem.text.strip().replace("\n", " ") if title_elem is not None else "No title"
-        
-        id_elem = entry.find("atom:id", ns)
-        arxiv_id = id_elem.text.split("/")[-1] if id_elem is not None else "unknown"
-        
-        summary_elem = entry.find("atom:summary", ns)
-        abstract = summary_elem.text.strip().replace("\n", " ") if summary_elem is not None else "No abstract"
-        
-        published_elem = entry.find("atom:published", ns)
-        published = published_elem.text if published_elem is not None else ""
-        
-        # 获取作者
-        authors = []
-        for author in entry.findall("atom:author", ns):
-            name_elem = author.find("atom:name", ns)
-            if name_elem is not None:
-                authors.append(name_elem.text)
-        
-        papers.append({
-            "arxiv_id": arxiv_id,
-            "title": title,
-            "abstract": abstract,
-            "published": published,
-            "authors": authors,
-        })
-    
-    return papers
+    raise Exception("Failed to search arXiv after all retries")
 
 
-def get_feishu_access_token():
-    """获取飞书访问令牌"""
+def get_feishu_access_token_with_retry():
+    """获取飞书访问令牌，带重试机制"""
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     payload = {
         "app_id": FEISHU_APP_ID,
         "app_secret": FEISHU_APP_SECRET
     }
-    response = requests.post(url, json=payload, timeout=30)
-    result = response.json()
-    if result.get("code") != 0:
-        raise Exception(f"Failed to get Feishu token: {result}")
-    return result["tenant_access_token"]
+    
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            response = requests.post(url, json=payload, timeout=30)
+            result = response.json()
+            
+            if result.get("code") == 0:
+                return result["tenant_access_token"]
+            
+            # 429 限流
+            if response.status_code == 429 or result.get("code") == 13004:
+                print(f"[WARNING] Feishu rate limited, retrying ({attempt + 1}/{MAX_RETRIES})")
+                time.sleep(RETRY_DELAY * (2 ** attempt))
+                continue
+            
+            # 其他错误不重试
+            raise Exception(f"Failed to get Feishu token: {result}")
+            
+        except requests.exceptions.RequestException as e:
+            print(f"[WARNING] Feishu token request failed: {e} (attempt {attempt + 1}/{MAX_RETRIES + 1})")
+            if attempt >= MAX_RETRIES:
+                raise
+    
+    raise Exception("Failed to get Feishu token after all retries")
 
 
 def send_feishu_message(message: str):
@@ -105,7 +168,7 @@ def send_feishu_message(message: str):
         print("[WARNING] FEISHU_CHAT_ID not set, skipping message send")
         return
     
-    token = get_feishu_access_token()
+    token = get_feishu_access_token_with_retry()
     url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
     
     headers = {
@@ -132,8 +195,9 @@ def send_feishu_message(message: str):
 
 def main():
     print("=" * 60)
-    print(f"[START] ArXiv Daily Monitor (GitHub Actions)")
+    print(f"[START] ArXiv Daily Monitor (GitHub Actions) - With Retry Logic")
     print(f"[INFO] Date: {date.today().isoformat()}")
+    print(f"[INFO] Config: Max retries={MAX_RETRIES}, Initial delay=10s, Request interval={REQUEST_INTERVAL}s")
     print("=" * 60)
     
     PAPERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,7 +211,13 @@ def main():
     
     # 搜索
     keywords = load_search_keywords()
-    all_papers = search_arxiv_papers(keywords, max_results=20)
+    try:
+        all_papers = search_arxiv_papers_with_retry(keywords, max_results=20)
+    except Exception as e:
+        error_msg = f"❌ arXiv API 错误：{str(e)}\n\n可能是临时限流，请稍后重试。GitHub Actions 会在明天 9:00 自动再次运行。"
+        send_feishu_message(error_msg)
+        sys.exit(1)
+    
     print(f"[INFO] Retrieved {len(all_papers)} papers from arXiv")
     
     # 查重
@@ -191,7 +261,7 @@ def main():
     print(f"[INFO] Updated crawled_ids.txt with {len(new_ids)} new IDs")
     
     print("=" * 60)
-    print("[DONE] Daily monitor completed")
+    print("[DONE] Daily monitor completed successfully")
     print("=" * 60)
 
 
