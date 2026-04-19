@@ -1,1 +1,1 @@
-(all:ocean+OR+all:oceanography)+AND+(all:deep+OR+all:neural+OR+all:transformer+OR+all:learning+OR+all:LSTM)
+all:oceanography+AND+(all:deep+OR+all:neural+OR+all:transformer+OR+all:learning+OR+all:LSTM+OR+all:CNN+OR+all:RNN+OR+all:AI+OR+all:"artificial intelligence"+OR+all:prediction+OR+all:forecast+OR+all:model+OR+all:data+assimilation)
