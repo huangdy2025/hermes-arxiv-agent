@@ -1,1 +1,1 @@
-all:quantization+AND+all:large+AND+all:language+AND+all:model
+(all:ocean+OR+all:oceanography)+AND+(all:deep+OR+all:neural+OR+all:transformer+OR+all:learning+OR+all:LSTM)
